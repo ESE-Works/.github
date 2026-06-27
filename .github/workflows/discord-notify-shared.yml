@@ -1,0 +1,111 @@
+name: Discord Thread Notification (Shared)
+
+on:
+  workflow_call:
+    secrets:
+      DISCORD_BOT_TOKEN:
+        required: true
+      DISCORD_CHANNEL_ID:
+        required: true
+
+jobs:
+  notify-discord:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Get commit info
+        id: commit_info
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%B | head -5)
+          echo "commit_msg<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMIT_MSG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          echo "author=$(git log -1 --pretty=%an)" >> $GITHUB_OUTPUT
+          echo "branch=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
+          echo "sha=$(git log -1 --pretty=%h)" >> $GITHUB_OUTPUT
+
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | head -10 | tr '\n' ',')
+          echo "changed_files=$CHANGED" >> $GITHUB_OUTPUT
+          echo "commit_url=https://github.com/${{ github.repository }}/commit/${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install discord.py
+
+      - name: Send Discord Thread
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          COMMIT_MSG: ${{ steps.commit_info.outputs.commit_msg }}
+          COMMIT_AUTHOR: ${{ steps.commit_info.outputs.author }}
+          COMMIT_BRANCH: ${{ steps.commit_info.outputs.branch }}
+          COMMIT_SHA: ${{ steps.commit_info.outputs.sha }}
+          COMMIT_URL: ${{ steps.commit_info.outputs.commit_url }}
+          CHANGED_FILES: ${{ steps.commit_info.outputs.changed_files }}
+          REPO_NAME: ${{ github.repository }}
+        run: |
+          cat << 'PYEOF' > /tmp/discord_notify.py
+          import os, asyncio, discord
+
+          BOT_TOKEN     = os.environ["DISCORD_BOT_TOKEN"]
+          CHANNEL_ID    = int(os.environ["DISCORD_CHANNEL_ID"])
+          COMMIT_MSG    = os.environ.get("COMMIT_MSG", "(없음)")
+          COMMIT_AUTHOR = os.environ.get("COMMIT_AUTHOR", "Unknown")
+          COMMIT_BRANCH = os.environ.get("COMMIT_BRANCH", "unknown")
+          COMMIT_SHA    = os.environ.get("COMMIT_SHA", "")
+          COMMIT_URL    = os.environ.get("COMMIT_URL", "")
+          CHANGED_FILES = os.environ.get("CHANGED_FILES", "")
+          REPO_NAME     = os.environ.get("REPO_NAME", "")
+
+          def format_files(s):
+              if not s: return "_(정보 없음)_"
+              files = [f.strip() for f in s.split(",") if f.strip()]
+              lines = [f"`{f}`" for f in files[:10]]
+              if len(files) > 10: lines.append(f"_... 외 {len(files)-10}개_")
+              return "\n".join(lines) if lines else "_(변경 없음)_"
+
+          def branch_color(b):
+              return discord.Color.green() if b == "main" else \
+                     discord.Color.blue()  if b == "develop" else \
+                     discord.Color.orange()
+
+          async def main():
+              intents = discord.Intents.default()
+              client  = discord.Client(intents=intents)
+
+              @client.event
+              async def on_ready():
+                  try:
+                      ch = client.get_channel(CHANNEL_ID) or await client.fetch_channel(CHANNEL_ID)
+                      msg = await ch.send(f"🚀 **새 커밋** | `{COMMIT_BRANCH}` | `{COMMIT_SHA}` — {REPO_NAME}")
+                      thread = await msg.create_thread(
+                          name=f"[{COMMIT_BRANCH}] {COMMIT_SHA} - {COMMIT_AUTHOR}"[:100],
+                          auto_archive_duration=1440
+                      )
+                      embed = discord.Embed(title="📦 커밋 상세 정보", url=COMMIT_URL, color=branch_color(COMMIT_BRANCH))
+                      embed.add_field(name="📝 커밋 메시지", value=COMMIT_MSG[:1024], inline=False)
+                      embed.add_field(name="👤 작성자",      value=COMMIT_AUTHOR,     inline=True)
+                      embed.add_field(name="🌿 브랜치",      value=f"`{COMMIT_BRANCH}`", inline=True)
+                      embed.add_field(name="🔖 SHA",         value=f"[`{COMMIT_SHA}`]({COMMIT_URL})", inline=True)
+                      embed.add_field(name="📂 변경된 파일", value=format_files(CHANGED_FILES), inline=False)
+                      embed.set_footer(text=REPO_NAME)
+                      await thread.send(embed=embed)
+                      print("✅ 스레드 생성 완료")
+                  finally:
+                      await client.close()
+
+              await client.start(BOT_TOKEN)
+
+          asyncio.run(main())
+          PYEOF
+          python /tmp/discord_notify.py
