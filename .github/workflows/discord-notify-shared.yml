@@ -55,7 +55,7 @@ jobs:
           REPO_NAME: ${{ github.repository }}
         run: |
           cat << 'PYEOF' > /tmp/discord_notify.py
-          import os, asyncio, discord
+          import os, sys, asyncio, discord
 
           BOT_TOKEN     = os.environ["DISCORD_BOT_TOKEN"]
           CHANNEL_ID    = int(os.environ["DISCORD_CHANNEL_ID"])
@@ -66,6 +66,8 @@ jobs:
           COMMIT_URL    = os.environ.get("COMMIT_URL", "")
           CHANGED_FILES = os.environ.get("CHANGED_FILES", "")
           REPO_NAME     = os.environ.get("REPO_NAME", "")
+
+          exit_code = 0
 
           def format_files(s):
               if not s: return "_(정보 없음)_"
@@ -80,11 +82,13 @@ jobs:
                      discord.Color.orange()
 
           async def main():
+              global exit_code
               intents = discord.Intents.default()
               client  = discord.Client(intents=intents)
 
               @client.event
               async def on_ready():
+                  global exit_code
                   try:
                       ch = client.get_channel(CHANNEL_ID) or await client.fetch_channel(CHANNEL_ID)
                       msg = await ch.send(f"🚀 **새 커밋** | `{COMMIT_BRANCH}` | `{COMMIT_SHA}` — {REPO_NAME}")
@@ -101,30 +105,15 @@ jobs:
                       embed.set_footer(text=REPO_NAME)
                       await thread.send(embed=embed)
                       print("✅ 스레드 생성 완료")
+                  except Exception as e:
+                      print(f"❌ 전송 실패: {e}")
+                      exit_code = 1
                   finally:
                       await client.close()
 
               await client.start(BOT_TOKEN)
 
           asyncio.run(main())
+          sys.exit(exit_code)
           PYEOF
           python /tmp/discord_notify.py
-
-exit_code = 0
-
-@client.event
-async def on_ready():
-    global exit_code
-    try:
-        ch = client.get_channel(CHANNEL_ID) or await client.fetch_channel(CHANNEL_ID)
-        msg = await ch.send(...)
-        thread = await msg.create_thread(...)
-        ...
-    except Exception as e:
-        print(f"❌ 전송 실패: {e}")
-        exit_code = 1
-    finally:
-        await client.close()
-
-asyncio.run(main())
-sys.exit(exit_code)
