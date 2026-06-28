@@ -91,11 +91,6 @@ jobs:
                   global exit_code
                   try:
                       ch = client.get_channel(CHANNEL_ID) or await client.fetch_channel(CHANNEL_ID)
-                      msg = await ch.send(f"🚀 **새 커밋** | `{COMMIT_BRANCH}` | `{COMMIT_SHA}` — {REPO_NAME}")
-                      thread = await msg.create_thread(
-                          name=f"[{COMMIT_BRANCH}] {COMMIT_SHA} - {COMMIT_AUTHOR}"[:100],
-                          auto_archive_duration=1440
-                      )
                       embed = discord.Embed(title="📦 커밋 상세 정보", url=COMMIT_URL, color=branch_color(COMMIT_BRANCH))
                       embed.add_field(name="📝 커밋 메시지", value=COMMIT_MSG[:1024], inline=False)
                       embed.add_field(name="👤 작성자",      value=COMMIT_AUTHOR,     inline=True)
@@ -103,8 +98,11 @@ jobs:
                       embed.add_field(name="🔖 SHA",         value=f"[`{COMMIT_SHA}`]({COMMIT_URL})", inline=True)
                       embed.add_field(name="📂 변경된 파일", value=format_files(CHANGED_FILES), inline=False)
                       embed.set_footer(text=REPO_NAME)
-                      await thread.send(embed=embed)
-                      print("✅ 스레드 생성 완료")
+                      await ch.send(
+                          content=f"🚀 **새 커밋** | `{COMMIT_BRANCH}` | `{COMMIT_SHA}` — {REPO_NAME}",
+                          embed=embed
+                      )
+                      print("✅ 메시지 전송 완료")
                   except Exception as e:
                       print(f"❌ 전송 실패: {e}")
                       exit_code = 1
