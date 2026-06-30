@@ -37,7 +37,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: pip install discord.py
@@ -55,7 +55,7 @@ jobs:
           REPO_NAME: ${{ github.repository }}
         run: |
           cat << 'PYEOF' > /tmp/discord_notify.py
-          import os, sys, asyncio, discord
+          import os, asyncio, discord
 
           BOT_TOKEN     = os.environ["DISCORD_BOT_TOKEN"]
           CHANNEL_ID    = int(os.environ["DISCORD_CHANNEL_ID"])
@@ -67,7 +67,8 @@ jobs:
           CHANGED_FILES = os.environ.get("CHANGED_FILES", "")
           REPO_NAME     = os.environ.get("REPO_NAME", "")
 
-          exit_code = 0
+          REPO_SHORT  = REPO_NAME.split("/")[-1] if "/" in REPO_NAME else REPO_NAME
+          THREAD_NAME = f"📦 {REPO_SHORT} · 🌿 {COMMIT_BRANCH}"[:100]
 
           def format_files(s):
               if not s: return "_(정보 없음)_"
@@ -81,37 +82,56 @@ jobs:
                      discord.Color.blue()  if b == "develop" else \
                      discord.Color.orange()
 
+          async def find_existing_thread(channel, name):
+              for thread in channel.threads:
+                  if thread.name == name:
+                      return thread
+              async for thread in channel.archived_threads(limit=50):
+                  if thread.name == name:
+                      if thread.archived:
+                          await thread.edit(archived=False)
+                      return thread
+              return None
+
           async def main():
-              global exit_code
               intents = discord.Intents.default()
               client  = discord.Client(intents=intents)
 
               @client.event
               async def on_ready():
-                  global exit_code
                   try:
                       ch = client.get_channel(CHANNEL_ID) or await client.fetch_channel(CHANNEL_ID)
-                      embed = discord.Embed(title="📦 커밋 상세 정보", url=COMMIT_URL, color=branch_color(COMMIT_BRANCH))
-                      embed.add_field(name="📝 커밋 메시지", value=COMMIT_MSG[:1024], inline=False)
-                      embed.add_field(name="👤 작성자",      value=COMMIT_AUTHOR,     inline=True)
+
+                      thread = await find_existing_thread(ch, THREAD_NAME)
+                      if thread is None:
+                          trigger_msg = await ch.send(
+                              f"🧵 커밋 알림\n"
+                              f"**저장소:** `{REPO_SHORT}`\n"
+                              f"**브랜치:** `{COMMIT_BRANCH}`"
+                          )
+                          thread = await trigger_msg.create_thread(
+                              name=THREAD_NAME,
+                              auto_archive_duration=1440
+                          )
+                          print(f"🆕 새 스레드 생성: {THREAD_NAME}")
+                      else:
+                          print(f"♻️ 기존 스레드 재사용: {THREAD_NAME}")
+
+                      embed = discord.Embed(title="📦 새 커밋", url=COMMIT_URL, color=branch_color(COMMIT_BRANCH))
+                      embed.add_field(name="📁 저장소",      value=f"`{REPO_SHORT}`",    inline=True)
                       embed.add_field(name="🌿 브랜치",      value=f"`{COMMIT_BRANCH}`", inline=True)
+                      embed.add_field(name="👤 작성자",      value=COMMIT_AUTHOR,        inline=True)
+                      embed.add_field(name="📝 커밋 메시지", value=COMMIT_MSG[:1024], inline=False)
                       embed.add_field(name="🔖 SHA",         value=f"[`{COMMIT_SHA}`]({COMMIT_URL})", inline=True)
                       embed.add_field(name="📂 변경된 파일", value=format_files(CHANGED_FILES), inline=False)
                       embed.set_footer(text=REPO_NAME)
-                      await ch.send(
-                          content=f"🚀 **새 커밋** | `{COMMIT_BRANCH}` | `{COMMIT_SHA}` — {REPO_NAME}",
-                          embed=embed
-                      )
+                      await thread.send(embed=embed)
                       print("✅ 메시지 전송 완료")
-                  except Exception as e:
-                      print(f"❌ 전송 실패: {e}")
-                      exit_code = 1
                   finally:
                       await client.close()
 
               await client.start(BOT_TOKEN)
 
           asyncio.run(main())
-          sys.exit(exit_code)
           PYEOF
           python /tmp/discord_notify.py
